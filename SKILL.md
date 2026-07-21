@@ -7,7 +7,7 @@ description: >
   row belonging to that order. Maintains a persisted processed_orders.json ledger (independent
   of column N) so a customer can never get a duplicate order even if a previous run's sheet
   write failed after Shopify already confirmed the order — safe to re-run any time. Also has a
-  separate `track` mode that checks orders placed in the last 48 hours for fulfillment tracking
+  separate `track` mode that checks orders placed in the last `tracking_check_window_hours` (default 7 days) for fulfillment tracking
   info (AWB/tracking number, tracking link, courier) and backfills columns O/P/Q once a courier
   has picked up the order. Use when the user says "create influencer orders", "run influencer
   order creation", "process influencer orders", "push new influencer orders to Shopify",
@@ -32,7 +32,7 @@ cat ~/.claude/skills/influencer-order-creation/config.json
 This has `creds_path` (Google service account key), `sheet_id`, `tab` name, the fixed column
 layout (A–Q: order details, N = order ID, O = Tracking Link, P = AWB Number, Q = Courier
 Partner), a `variant_cache` (Shopify Product ID → default Variant ID) built up over past runs,
-and `tracking_check_window_hours` (default 48 — see the Tracking Check mode below). If the
+and `tracking_check_window_hours` (default 168h / 7 days — see the Tracking Check mode below). If the
 file is missing, stop and tell the user — this skill was scaffolded with a known-good config
 on 2026-07-13 and shouldn't normally be absent.
 
@@ -340,14 +340,16 @@ Separate from Order Creation — run this when the user asks to check/capture tr
 numbers, or courier info for influencer orders. It does **not** create any orders; it only
 reads Shopify and backfills columns O/P/Q for orders already in the ledger.
 
-**Why a 48-hour window, and why separate from Order Creation:** fulfillment (courier pickup +
+**Why a windowed check, and why separate from Order Creation:** fulfillment (courier pickup +
 AWB assignment) happens some time after the order is created, not at the same moment, so
 checking for tracking info during Order Creation would almost always find nothing. Rather
 than re-checking the entire historical ledger forever (wasted API calls, and older orders are
 presumably already handled through the older sheet/process), only orders created within
-`cfg['tracking_check_window_hours']` (default 48) that don't yet have tracking captured are
-worth checking on each run. This was an explicit 2026-07-17 decision — don't widen the window
-without asking.
+`cfg['tracking_check_window_hours']` (default 168h / 7 days) that don't yet have tracking captured are
+worth checking on each run. The window started at 48h (2026-07-17) but was widened to 168h/7
+days on 2026-07-21 after two consecutive runs found zero candidates in the 48h window because
+actual run cadence was closer to every 3 days — the window should match how often this
+actually gets run, not an arbitrary guess. Don't widen further without asking.
 
 ### TC-Step 1 — Find Candidates
 
@@ -360,7 +362,7 @@ with open(os.path.expanduser('~/.claude/skills/influencer-order-creation/config.
 ledger_path = os.path.expanduser('~/.claude/skills/influencer-order-creation/processed_orders.json')
 ledger = json.load(open(ledger_path)) if os.path.exists(ledger_path) else {}
 
-cutoff = datetime.now(timezone.utc) - timedelta(hours=cfg.get('tracking_check_window_hours', 48))
+cutoff = datetime.now(timezone.utc) - timedelta(hours=cfg.get('tracking_check_window_hours', 168))
 candidates = {
     onum: entry['shopify_order_name']
     for onum, entry in ledger.items()
@@ -436,7 +438,7 @@ Tell the user:
 
 - `/influencer-order-creation` — process all pending (new) rows in "Influencer orders - Final"
   (Order Creation mode)
-- `/influencer-order-creation track` — check the last 48h of created orders for fulfillment
+- `/influencer-order-creation track` — check recently-created orders (default: last 7 days) for fulfillment
   tracking info and backfill columns O/P/Q (Tracking Check mode)
 - No dry-run / draft mode for order creation — per the 2026-07-13 decision, this always
   creates live orders. If the user wants a review step for a specific run, they'll say so
